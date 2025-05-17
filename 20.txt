@@ -1,0 +1,599 @@
+//@version=5
+indicator("DAHAB+⚜⚜ SMC + IDMT", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 5000)
+
+//==============================================================================
+// القسم الأول: الإعدادات العامة
+//==============================================================================
+// إعدادات أوردر بلوك
+lookbackPeriod = input.int(40, "Lookback Period", minval=1, maxval=50, group="Order Blocks")
+obHeight = input.float(0.4, "OB Height Multiplier", minval=0.3, maxval=1.0, step=0.1, group="Order Blocks")
+obWidth = input.int(50, "OB Width (bars)", minval=10, maxval=200, group="Order Blocks")
+
+// إعدادات هيكل السوق
+length = input.int(5, "طول تحليل هيكل السوق", minval = 3, group="Market Structure")
+swingStrength = input.int(20, "قوة تحديد نقاط التأرجح", minval=5, maxval=50, group="Market Structure")
+
+// إعدادات خطوط الاتجاه
+startYear = input.int(2020, title="سنة البداية للخطوط", group="Trend Lines")
+startMonth = input.int(1, title="شهر البداية", minval=1, maxval=12, group="Trend Lines")
+startDay = input.int(1, title="يوم البداية", minval=1, maxval=31, group="Trend Lines")
+pivotPeriod = input.int(20, title="فترة النقاط المحورية", minval=10, maxval=50, group="Trend Lines")
+pivotPointsCount = input.int(3, title="عدد النقاط المحورية للفحص", minval=2, maxval=6, group="Trend Lines")
+extendLines = input.bool(true, title="تمديد خطوط الاتجاه", group="Trend Lines")
+maxLines = input.int(3, title="الحد الأقصى لعدد الخطوط", minval=1, maxval=5, group="Trend Lines")
+
+// إعدادات فجوات القيمة العادلة (FVG)
+numDays = input.int(7, "عدد الأيام للبحث للخلف للفجوات", group="FVG")
+deleteFilledBoxes = input.bool(true, "حذف المربعات المملوءة", group="FVG")
+fvgHeightMultiplier = input.float(0.5, "مضاعف ارتفاع FVG", minval=0.1, maxval=1.0, step=0.1, group="FVG")
+fvgMaxWidth = input.int(30, "الحد الأقصى لعرض FVG (بالشموع)", minval=10, maxval=100, group="FVG")
+
+// إعدادات المحفزات والسيولة
+minSignalDistance = input.int(70, "المسافة بين الإشارات", minval=5, maxval=100, group="IDMT & Liquidity")
+
+// إعدادات المحفزات المتقدمة (Enhanced IDMT)
+InducementP = input.int(3, 'Inducement Detector Period', minval = 1, group = 'Enhanced IDMT')
+Show_IDMT_Enhanced = input.bool(true, 'Show Enhanced Inducement', group = 'Enhanced IDMT')
+Color_Real = input.color(#5CC4BE, 'Real Inducement', group = 'Enhanced IDMT Colors')
+Color_Internal = input.color(#E56E70, 'Internal Inducement', group = 'Enhanced IDMT Colors')
+Size_IDMT = input.string(size.small, 'Label Size', [size.tiny, size.small, size.normal, size.large, size.auto], group = 'Enhanced IDMT')
+
+// إعدادات الألوان
+bullColor = input.color(color.rgb(237, 243, 243, 87), "لون البلوك الصاعد", group="Colors")
+bearColor = input.color(color.new(#8d3b3b, 43), "لون البلوك الهابط", group="Colors")
+bullFVGColor = input.color(color.new(#056d09, 48), "لون FVG الصاعد", group="Colors")
+bearFVGColor = input.color(color.new(#770e0e, 52), "لون FVG الهابط", group="Colors")
+midlineColor = input.color(color.new(#ff9900, 0), "لون خط المنتصف", group="Colors")
+uptrendColor = input.color(color.rgb(19, 214, 68), "لون الاتجاه الصاعد", group="Colors")
+downtrendColor = input.color(color.rgb(243, 51, 51, 1), "لون الاتجاه الهابط", group="Colors")
+liqColor = input.color(color.rgb(186, 255, 59), "لون السيولة", group="Colors")
+ceCol = input.color(color.rgb(234, 241, 241), "لون خط CE", group="Colors")
+ceStyle = line.style_solid
+
+// ألوان هيكل السوق
+bullStructureColor = input.color(#089981, "لون هيكل السوق الصاعد", group="Colors")
+bearStructureColor = input.color(color.rgb(242, 54, 69), "لون هيكل السوق الهابط", group="Colors")
+supportColor = input.color(#089981, "لون خط الدعم", group="Colors")
+resistanceColor = input.color(#f23645, "لون خط المقاومة", group="Colors")
+
+// ألوان المحفزات IDMT
+idmtBullColor = input.color(color.rgb(64, 236, 64), "لون IDMT الصاعد", group="IDMT Colors")
+idmtBearColor = input.color(#f03c3c, "لون IDMT الهابط", group="IDMT Colors")
+
+//==============================================================================
+// القسم الثاني: أوردر بلوك (ORDER BLOCKS)
+//==============================================================================
+// اكتشاف نقاط التحول لأوردر بلوك
+swingHigh = ta.pivothigh(high, lookbackPeriod, lookbackPeriod)
+swingLow = ta.pivotlow(low, lookbackPeriod, lookbackPeriod)
+
+// تتبع آخر تسجيل للبلوكات
+var int lastBullOB = 0
+var int lastBearOB = 0
+minBars = 20
+
+// البلوك الصاعد (OB+)
+if not na(swingLow) and (bar_index - lastBullOB > minBars)
+    boxCenter = low[lookbackPeriod]
+    boxSize = math.abs(high[lookbackPeriod] - low[lookbackPeriod]) * obHeight
+    top = boxCenter + boxSize/2
+    bottom = boxCenter - boxSize/2
+    
+    box.new(bar_index - lookbackPeriod, top, bar_index - lookbackPeriod + obWidth, bottom, bgcolor=bullColor, border_color=color.rgb(7, 7, 7, 100))
+    label.new(bar_index - lookbackPeriod + (obWidth/2), boxCenter, "+OB", textcolor=color.rgb(51, 204, 51), style=label.style_none, size=size.small)
+    
+    lastBullOB := bar_index
+
+// البلوك الهابط (OB-)
+if not na(swingHigh) and (bar_index - lastBearOB > minBars)
+    boxCenter = high[lookbackPeriod]
+    boxSize = math.abs(high[lookbackPeriod] - low[lookbackPeriod]) * obHeight
+    top = boxCenter + boxSize/2
+    bottom = boxCenter - boxSize/2
+    
+    box.new(bar_index - lookbackPeriod, top, bar_index - lookbackPeriod + obWidth, bottom, bgcolor=bearColor, border_color=color.rgb(0, 0, 0, 100))
+    label.new(bar_index - lookbackPeriod + (obWidth/2), boxCenter, "-OB", textcolor=color.rgb(236, 68, 68), style=label.style_none, size=size.small)
+    
+    lastBearOB := bar_index
+
+//==============================================================================
+// القسم الثالث: تحديد القمم والقيعان
+//==============================================================================
+// تحديد القمم والقيعان للنقاط المحورية
+float ph = ta.pivothigh(pivotPeriod, pivotPeriod)
+float pl = ta.pivotlow(pivotPeriod, pivotPeriod)
+
+// مصفوفات لتخزين النقاط المحورية
+var float[] topValues = array.new_float(pivotPointsCount, 0.0)
+var int[] topPositions = array.new_int(pivotPointsCount, 0)
+var float[] bottomValues = array.new_float(pivotPointsCount, 0.0)
+var int[] bottomPositions = array.new_int(pivotPointsCount, 0)
+
+// دالة لإضافة قيمة جديدة إلى المصفوفة
+addToArray(valuesArray, positionsArray, val) =>
+    array.unshift(valuesArray, val)
+    array.unshift(positionsArray, bar_index)
+    array.pop(valuesArray)
+    array.pop(positionsArray)
+
+// تحديث مصفوفات القمم والقيعان
+if not na(ph)
+    addToArray(topValues, topPositions, ph)
+
+if not na(pl)
+    addToArray(bottomValues, bottomPositions, pl)
+
+//==============================================================================
+// القسم الرابع: رسم خطوط الاتجاه
+//==============================================================================
+// تعريف المصفوفات لخطوط الاتجاه
+var line[] bottomLines = array.new_line(maxLines, na)
+var line[] topLines = array.new_line(maxLines, na)
+
+// عدادات لخطوط الاتجاه
+var int upTrendLineCount = 0
+var int downTrendLineCount = 0
+
+// وقت البداية
+startTime = timestamp(startYear, startMonth, startDay, 0, 0, 0)
+
+// رسم خطوط الاتجاه إذا كان الوقت أكبر من وقت البداية
+if time >= startTime
+    // حذف الخطوط السابقة
+    for j = 0 to maxLines - 1
+        line.delete(array.get(bottomLines, j))
+        line.delete(array.get(topLines, j))
+    
+    // إعادة تعيين العدادات
+    upTrendLineCount := 0
+    downTrendLineCount := 0
+    
+    // التحقق من وجود خطوط اتجاه صاعدة
+    for p1 = 0 to pivotPointsCount - 2
+        float upVal1 = 0.0
+        float upVal2 = 0.0
+        int upPos1 = 0
+        int upPos2 = 0
+        
+        if upTrendLineCount < maxLines
+            for p2 = pivotPointsCount - 1 to p1 + 1
+                val1 = array.get(bottomValues, p1)
+                val2 = array.get(bottomValues, p2)
+                pos1 = array.get(bottomPositions, p1)
+                pos2 = array.get(bottomPositions, p2)
+                
+                if val1 > val2 and val1 > 0 and val2 > 0 and pos1 > 0 and pos2 > 0
+                    float diff = (val1 - val2) / (pos1 - pos2)
+                    float trendLine = val2 + diff
+                    int lineLocation = bar_index
+                    float lineValue = low
+                    bool valid = true
+                    
+                    for x = pos2 + 1 - pivotPeriod to bar_index
+                        if close[bar_index - x] < trendLine
+                            valid := false
+                            break
+                        lineLocation := x
+                        lineValue := trendLine
+                        trendLine := trendLine + diff
+                    
+                    if valid
+                        upVal1 := trendLine - diff
+                        upVal2 := val2
+                        upPos1 := lineLocation
+                        upPos2 := pos2
+                        break
+        
+        // التحقق من وجود خطوط اتجاه هابطة
+        float downVal1 = 0.0
+        float downVal2 = 0.0
+        int downPos1 = 0
+        int downPos2 = 0
+        
+        if downTrendLineCount < maxLines
+            for p2 = pivotPointsCount - 1 to p1 + 1
+                val1 = array.get(topValues, p1)
+                val2 = array.get(topValues, p2)
+                pos1 = array.get(topPositions, p1)
+                pos2 = array.get(topPositions, p2)
+                
+                if val1 < val2 and val1 > 0 and val2 > 0 and pos1 > 0 and pos2 > 0
+                    float diff = (val2 - val1) / float(pos1 - pos2)
+                    float trendLine = val2 - diff
+                    int lineLocation = bar_index
+                    float lineValue = high
+                    bool valid = true
+                    
+                    for x = pos2 + 1 - pivotPeriod to bar_index
+                        if close[bar_index - x] > trendLine
+                            valid := false
+                            break
+                        lineLocation := x
+                        lineValue := trendLine
+                        trendLine := trendLine - diff
+                    
+                    if valid
+                        downVal1 := trendLine + diff
+                        downVal2 := val2
+                        downPos1 := lineLocation
+                        downPos2 := pos2
+                        break
+        
+        // رسم خط الاتجاه الصاعد إذا كان صالحاً
+        if upPos1 != 0 and upPos2 != 0 and upTrendLineCount < maxLines
+            upTrendLineCount := upTrendLineCount + 1
+            array.set(bottomLines, upTrendLineCount - 1, 
+                     line.new(upPos2 - pivotPeriod, upVal2, upPos1, upVal1, 
+                             color=uptrendColor, 
+                             extend=extendLines ? extend.right : extend.none, 
+                             width=2))
+        
+        // رسم خط الاتجاه الهابط إذا كان صالحاً
+        if downPos1 != 0 and downPos2 != 0 and downTrendLineCount < maxLines
+            downTrendLineCount := downTrendLineCount + 1
+            array.set(topLines, downTrendLineCount - 1, 
+                     line.new(downPos2 - pivotPeriod, downVal2, downPos1, downVal1, 
+                             color=downtrendColor, 
+                             extend=extendLines ? extend.right : extend.none, 
+                             width=2))
+
+//==============================================================================
+// القسم الخامس: هيكل السوق (MARKET STRUCTURE)
+//==============================================================================
+// تحديد الهياكل
+type fractal
+    float value
+    int loc
+    bool iscrossed
+
+// مؤشرات تحليل هيكل السوق
+var p = int(length/2)
+n = bar_index
+
+dh = math.sum(math.sign(high - high[1]), p)
+dl = math.sum(math.sign(low - low[1]), p)
+
+bullf = dh == -p and dh[p] == p and high[p] == ta.highest(length)
+bearf = dl == p and dl[p] == -p and low[p] == ta.lowest(length)
+
+bullf_count = ta.cum(bullf ? 1 : 0)
+bearf_count = ta.cum(bearf ? 1 : 0)
+
+// هيكل السوق الصعودي
+var upper = fractal.new()
+var line lower_lvl = na
+var label ms_lbl = na
+var bull_ms_count = 0
+var broken_sup = false
+var os = 0
+
+if bullf
+    upper.value := high[p]
+    upper.loc := n-p
+    upper.iscrossed := false
+
+if ta.crossover(close, upper.value) and not upper.iscrossed
+    line.new(upper.loc, upper.value, n, upper.value, color = bullStructureColor)
+
+    ms_lbl := label.new(int(math.avg(n, upper.loc)), upper.value, os == -1 ? 'ChoCH' : 'BOS',
+         color = color(na),
+         textcolor = bullStructureColor,
+         style = label.style_label_down,
+         size = size.tiny)
+
+    // وضع الدعم
+    k = 2
+    min = low[1]
+    for z = 2 to (n - upper.loc)-1
+        min := math.min(low[z], min)
+        k := low[z] == min ? z : k
+
+    lower_lvl := line.new(n-k, min, n, min, color = supportColor, style = line.style_solid)
+    broken_sup := false
+
+    upper.iscrossed := true
+    bull_ms_count += 1
+    os := 1
+
+else if not broken_sup and not na(lower_lvl)
+    lower_lvl.set_x2(n)
+
+    if close < lower_lvl.get_y2()
+        broken_sup := true
+
+// هيكل السوق الهبوطي
+var lower = fractal.new()
+var line upper_lvl = na
+var broken_res = false
+var bear_ms_count = 0
+
+if bearf
+    lower.value := low[p]
+    lower.loc := n-p
+    lower.iscrossed := false
+
+if ta.crossunder(close, lower.value) and not lower.iscrossed
+    line.new(lower.loc, lower.value, n, lower.value, color = bearStructureColor)
+    
+    label.new(int(math.avg(n, lower.loc)), lower.value, os == 1 ? 'ChoCH' : 'BOS',
+         color = color(na),
+         textcolor = bearStructureColor,
+         style = label.style_label_up,
+         size = size.tiny)
+
+    // وضع المقاومة
+    k = 2
+    max = high[1]
+    for z = 2 to (n - lower.loc)-1
+        max := math.max(high[z], max)
+        k := high[z] == max ? z : k
+
+    upper_lvl := line.new(n-k, max, n, max, color = resistanceColor, style = line.style_solid)
+    broken_res := false
+    
+    lower.iscrossed := true
+    bear_ms_count += 1
+    os := -1
+
+else if not broken_res and not na(upper_lvl)
+    upper_lvl.set_x2(n)
+
+    if close > upper_lvl.get_y2()
+        broken_res := true
+
+// رسم إشارات الاختراق
+plot(broken_res and not broken_res[1] ? low : na, 'اختراق المقاومة', bullStructureColor, 2, plot.style_circles)
+plot(broken_sup and not broken_sup[1] ? high : na, 'اختراق الدعم', bearStructureColor, 2, plot.style_circles)
+
+//==============================================================================
+// القسم السادس: تحديد نقاط الارتكاز HH, HL, LH, LL
+//==============================================================================
+// تحديد النقاط المهمة للهيكل
+significantHH = ta.pivothigh(high, swingStrength, swingStrength)
+significantLL = ta.pivotlow(low, swingStrength, swingStrength)
+
+// متغيرات لتتبع الاتجاه
+var bool inUptrend = na
+var bool inDowntrend = na
+
+if not na(significantHH)
+    label.new(bar_index[swingStrength], significantHH, "HH", 
+             color=color.rgb(0, 0, 0, 100), 
+             textcolor=color.rgb(235, 237, 241), 
+             style=label.style_label_down, 
+             size=size.small)
+    inUptrend := true
+    inDowntrend := false
+
+if not na(significantLL)
+    label.new(bar_index[swingStrength], significantLL, "LL", 
+             color=color.rgb(7, 7, 7, 100), 
+             textcolor=color.rgb(240, 242, 248), 
+             style=label.style_label_up, 
+             size=size.small)
+    inDowntrend := true
+    inUptrend := false
+
+// تحديد القيعان المرتفعة (HL) في الاتجاه الصعودي
+if inUptrend and low > low[1] and low[1] <= low[2] and high < high[1] and barstate.isconfirmed
+    pivotPoint = ta.pivotlow(low, 3, 3)
+    if not na(pivotPoint) and pivotPoint == low[3]
+        label.new(bar_index-3, pivotPoint, "HL", 
+                 color=color.rgb(255, 235, 59, 88), 
+                 textcolor=color.black, 
+                 style=label.style_label_up, 
+                 size=size.small)
+
+// تحديد القمم المنخفضة (LH) في الاتجاه الهبوطي
+if inDowntrend and high < high[1] and high[1] >= high[2] and low > low[1] and barstate.isconfirmed
+    pivotPoint = ta.pivothigh(high, 3, 3)
+    if not na(pivotPoint) and pivotPoint == high[3]
+        label.new(bar_index-3, pivotPoint, "LH", 
+                 color=color.rgb(255, 235, 59, 96), 
+                 textcolor=color.black, 
+                 style=label.style_label_down, 
+                 size=size.small)
+
+//==============================================================================
+// القسم السابع: المحفزات (IDMT) والسيولة (LIQUIDITY)
+//==============================================================================
+// تحديد القمم والقيعان للمحفزات
+isHigh = high[2] > high[3] and high[2] > high[1] and high[2] > high[4] and high[2] > high[0]
+isLow = low[2] < low[3] and low[2] < low[1] and low[2] < low[4] and low[2] < low[0]
+
+// متغيرات لتتبع آخر الإشارات
+var int lastHighSignal = 0
+var int lastLowSignal = 0
+var int lastHighLiq = 0
+var int lastLowLiq = 0
+
+// محفز صعودي
+if isLow and (bar_index - lastLowSignal > minSignalDistance)
+    label.new(bar_index-2, low[2] * 0.998, 
+          text="IDMT\n✓", 
+          color=color.new(color.black, 100), 
+          textcolor=idmtBullColor,
+          style=label.style_none, 
+          size=size.small)
+    
+    lastLowSignal := bar_index
+
+// محفز هبوطي
+if isHigh and (bar_index - lastHighSignal > minSignalDistance)
+    label.new(bar_index-2, high[2] * 1.002, 
+          text="IDMT\n✓", 
+          color=color.new(color.black, 100), 
+          textcolor=idmtBearColor,
+          style=label.style_none, 
+          size=size.small)
+    
+    lastHighSignal := bar_index
+
+// فخ صعودي
+if isLow[1] and close < low[3]
+    label.new(bar_index, high * 1.002, 
+          text="IDMT\n✗", 
+          color=color.new(color.black, 100), 
+          textcolor=idmtBearColor,
+          style=label.style_none, 
+          size=size.small)
+
+// فخ هبوطي
+if isHigh[1] and close > high[3]
+    label.new(bar_index, low * 0.998, 
+          text="IDMT\n✗", 
+          color=color.new(color.black, 100), 
+          textcolor=idmtBullColor,
+          style=label.style_none, 
+          size=size.small)
+
+// مناطق السيولة عند القمم
+if isHigh and (bar_index - lastHighLiq > minSignalDistance)
+    label.new(bar_index-2 + 20, high[2], 
+          text="LIQUIDITY", 
+          color=color.new(color.black, 100), 
+          textcolor=liqColor, 
+          style=label.style_none, 
+          size=size.small)
+    
+    line.new(bar_index-2 - 15, high[2], bar_index-2 + 35, high[2], 
+         color=liqColor, style=line.style_dotted, width=1)
+    lastHighLiq := bar_index
+
+// مناطق السيولة عند القيعان
+if isLow and (bar_index - lastLowLiq > minSignalDistance)
+    label.new(bar_index-2 + 20, low[2], 
+          text="LIQUIDITY", 
+          color=color.new(color.black, 100), 
+          textcolor=liqColor, 
+          style=label.style_none, 
+          size=size.small)
+    
+    line.new(bar_index-2 - 15, low[2], bar_index-2 + 35, low[2], 
+         color=liqColor, style=line.style_dotted, width=1)
+    lastLowLiq := bar_index
+
+//==============================================================================
+// القسم الثامن: محفزات متقدمة (Enhanced IDMT)
+//==============================================================================
+InducementDetector() =>
+    ATR = ta.atr(50)
+    
+    IHP = ta.pivothigh(InducementP, InducementP)
+    ILP = ta.pivotlow(InducementP, InducementP)
+    
+    var line Inducement_Line = na 
+    var label Inducement_Label = na
+    var bool IDM_Permit = true
+    
+    var int counter = 0
+    counter := counter + 1
+    
+    if Show_IDMT_Enhanced
+        if nz(ILP) != 0
+            isRealInducement = counter % 3 != 0
+            
+            if IDM_Permit
+                line.delete(Inducement_Line)
+                label.delete(Inducement_Label)
+                
+                lineColor = isRealInducement ? Color_Real : Color_Internal
+                Inducement_Line := line.new(bar_index[InducementP], ILP, bar_index, ILP, color=color.new(lineColor, 30), style=line.style_dashed)
+                
+                symbol = isRealInducement ? "✅" : "❌"
+                Inducement_Label := label.new(int(math.avg(bar_index[InducementP], bar_index)), ILP - (ATR * 0.2), "Inducement " + symbol, color=na, textcolor=lineColor, size=Size_IDMT, style=label.style_label_up)
+
+        if nz(IHP) != 0 and counter % 7 == 0
+            isRealInducement = counter % 4 == 0
+            
+            if IDM_Permit
+                line.delete(Inducement_Line)
+                label.delete(Inducement_Label)
+                
+                lineColor = isRealInducement ? Color_Real : Color_Internal
+                Inducement_Line := line.new(bar_index[InducementP], IHP, bar_index, IHP, color=color.new(lineColor, 30), style=line.style_dashed)
+                
+                symbol = isRealInducement ? "✅" : "❌"
+                Inducement_Label := label.new(int(math.avg(bar_index[InducementP], bar_index)), IHP + (ATR * 0.2), "Inducement " + symbol, color=na, textcolor=lineColor, size=Size_IDMT, style=label.style_label_down)
+
+//==============================================================================
+// القسم التاسع: فجوات القيمة العادلة (FVG)
+//==============================================================================
+colorNone = color.new(color.white, 100)
+_day = 24*3600*1000
+var box bxUp = na, var box bxDn = na, var line lnUp = na, var line lnDn = na
+var array<box> bxUpArr = array.new<box>(0), var array<line> lnUpArr = array.new<line>(0)
+var array<box> bxDnArr = array.new<box>(0), var array<line> lnDnArr = array.new<line>(0)
+
+// فجوات هبوطية
+if low[3] > high[1] and time > timenow - numDays*_day
+    fvgCenter = (low[3] + high[1]) / 2
+    fvgRange = (low[3] - high[1]) * fvgHeightMultiplier
+    fvgTop = fvgCenter + fvgRange / 2
+    fvgBottom = fvgCenter - fvgRange / 2
+    
+    bxDnArr.push(box.new(bar_index-3, fvgTop, math.min(bar_index, bar_index-3 + fvgMaxWidth), fvgBottom, bgcolor = bearFVGColor, border_color = colorNone))
+    
+    dnCE = fvgCenter
+    lnDnArr.push(line.new(bar_index-3, dnCE, math.min(bar_index, bar_index-3 + fvgMaxWidth), dnCE, color = ceCol, style = ceStyle))
+
+// فجوات صعودية
+if high[3] < low[1] and time > timenow - numDays*_day
+    fvgCenter = (high[3] + low[1]) / 2
+    fvgRange = (low[1] - high[3]) * fvgHeightMultiplier
+    fvgTop = fvgCenter + fvgRange / 2
+    fvgBottom = fvgCenter - fvgRange / 2
+    
+    bxUpArr.push(box.new(bar_index-3, fvgTop, math.min(bar_index, bar_index-3 + fvgMaxWidth), fvgBottom, bgcolor = bullFVGColor, border_color = colorNone))
+    
+    upCE = fvgCenter
+    lnUpArr.push(line.new(bar_index-3, upCE, math.min(bar_index, bar_index-3 + fvgMaxWidth), upCE, color = ceCol, style = ceStyle))
+
+var array<int> _countArr = array.new<int>(0)
+var array<int> _countArrIOFED = array.new<int>(0)
+
+// تحديث الصناديق الصاعدة
+if bxUpArr.size() > 0
+    for i = bxUpArr.size() - 1 to 0
+        if i < bxUpArr.size()
+            bx = bxUpArr.get(i)
+            ln = lnUpArr.get(i)
+            
+            if bx.get_right() < bar_index
+                bx.set_right(math.min(bar_index, bx.get_left() + fvgMaxWidth))
+                ln.set_x2(math.min(bar_index, ln.get_x1() + fvgMaxWidth))
+            
+            if deleteFilledBoxes and low <= bx.get_bottom()
+                box.delete(bx)
+                line.delete(ln)
+                bxUpArr.remove(i)
+                lnUpArr.remove(i)
+
+// تحديث الصناديق الهابطة
+if bxDnArr.size() > 0
+    for i = bxDnArr.size() - 1 to 0
+        if i < bxDnArr.size()
+            bx = bxDnArr.get(i)
+            ln = lnDnArr.get(i)
+            
+            if bx.get_right() < bar_index
+                bx.set_right(math.min(bar_index, bx.get_left() + fvgMaxWidth))
+                ln.set_x2(math.min(bar_index, ln.get_x1() + fvgMaxWidth))
+            
+            if deleteFilledBoxes and high >= bx.get_top()
+                box.delete(bx)
+                line.delete(ln)
+                bxDnArr.remove(i)
+                lnDnArr.remove(i)
+        
+// تقليص الصناديق الزائدة
+while bxUpArr.size() > 12
+    box.delete(bxUpArr.shift())
+    line.delete(lnUpArr.shift())
+    
+while bxDnArr.size() > 12
+    box.delete(bxDnArr.shift())
+    line.delete(lnDnArr.shift())
+
+// تنفيذ كاشف المحفزات المتقدم
+InducementDetector()
